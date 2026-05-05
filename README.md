@@ -2,6 +2,81 @@
 
 #stochastic-simulation #multivariate-linear-regression
 
+## Python port (in progress)
+
+A Python implementation lives in `src/lim/` alongside the original MATLAB
+sources (now in `matlab/`). Highlights:
+
+* Stationary LIM (`fit_operator`) and **cyclostationary** LIM
+  (`fit_cyclo`) — the latter fits one operator per phase of a periodic cycle
+  (e.g., 52 weekly phases) and is more skillful for seasonally varying systems
+  like Arctic sea ice.
+* Three forecast/simulation modes: `forecast_deterministic` (`expm(L*tau) x0`),
+  `forecast_ensemble` (initial-value problem with stochastic forcing), and
+  `simulate` (free-running long control runs — the closest analog to
+  `tx_lim_simulation.m`).
+* `trend_mode` — least-damped eigenmode extraction with the original
+  `tx_lim_trend.m` X-undefined bug fixed (the `.m` file is preserved verbatim
+  in `matlab/` for archival).
+* `deseasonalize` — 3-harmonic / day-of-year / week-of-year removal.
+* `eof` — masked, `cos(lat)`-weighted SVD with `project` / `reconstruct`
+  helpers.
+* `fit_lim_from_grid` — end-to-end pipeline from a gridded NetCDF
+  `xarray.DataArray` to a fitted LIM in PC space.
+
+Time units are caller-supplied: `tau0`, `dt`, and `lead` share whatever unit
+the input series is sampled at, and `L` has units of `1/[that unit]`. The
+MATLAB hardcoded `dt = 16/24/30` (months) is gone.
+
+### Install and test
+
+```bash
+pip install -e .[dev]
+pytest                       # unit + statistical tests
+ruff check src tests         # lint
+mypy src/                    # type-check
+```
+
+The Octave parity test (`tests/test_operator_octave_parity.py`) is skipped
+unless you run `scripts/generate_matlab_fixture.m` to produce the reference
+`.mat` fixture.
+
+### Quick example
+
+```python
+import lim
+import numpy as np
+
+# X is (n_modes, n_times) — typically EOF amplitudes of a deseasonalized field.
+fit = lim.fit_operator(X, tau0=4)
+
+# 1- and 4-step deterministic forecast from a single initial condition.
+forecast = lim.forecast_deterministic(fit, x0=X[:, -1], leads=[1, 4])
+
+# Stochastic ensemble forecast (200 members) at lead 4.
+ensemble = lim.forecast_ensemble(fit, x0=X[:, -1], leads=4.0, n_members=200, rng=0)
+
+# Free-running 100-year control simulation at weekly cadence (52 steps/year).
+sim = lim.simulate(fit, n_steps=52 * 100, dt=1.0, n_members=4, spinup_steps=2_000, rng=0)
+
+# Cyclostationary fit (one operator per week-of-year) on the same X:
+phase = np.arange(X.shape[1]) % 52
+cs_fit = lim.fit_cyclo(X, phase, tau0=1, period=52)
+G_winter_to_spring = lim.cyclo_propagator(cs_fit, phase0=0, n_steps=12)
+```
+
+For the gridded pipeline (NetCDF in, fitted model out):
+
+```python
+model = lim.fit_lim_from_grid(
+    da,                          # xarray.DataArray (time, lat, lon)
+    tau0=1, n_eofs=10,
+    mode="cyclo", period=52,     # weekly CS-LIM
+)
+```
+
+---
+
 ## 1. Introduction
 
 The time evolution of a climate state $\mathbf{x}$ may often be approximated by the stochastically forced linear dynamical system,
